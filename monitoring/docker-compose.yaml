@@ -1,0 +1,198 @@
+services:
+  vmagent:
+    image: victoriametrics/vmagent:latest
+    container_name: vmagent
+    ports:
+      - "8429:8429"
+    depends_on:
+      - victoriametrics
+    volumes:
+      - ./vmagent/vmagent-config.yaml:/etc/vmagent/config.yaml:ro
+    command:
+      - "--promscrape.config=/etc/vmagent/config.yaml"
+      - "--remoteWrite.url=http://victoriametrics:8428/api/v1/write"
+    networks:
+      - observability-net
+      - monitoring
+    restart: unless-stopped
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: victoriametrics
+    ports:
+      - "8428:8428"
+    volumes:
+      - vm-data:/victoria-metrics-data
+    command:
+      - "--storageDataPath=/victoria-metrics-data"
+      - "--httpListenAddr=:8428"
+      - "--vmalert.proxyURL=http://vmalert:8880"
+      - "--retentionPeriod=30d"
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki/local-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:latest
+    container_name: alloy
+    ports:
+      - "12345:12345"
+    volumes:
+      - ./alloy/alloy-config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: run --server.http.listen-addr=0.0.0.0:12345 /etc/alloy/config.alloy
+    depends_on:
+      - loki
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana-provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - victoriametrics
+      - loki
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yaml"
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  vmalert:
+    image: victoriametrics/vmalert:latest
+    container_name: vmalert
+    depends_on:
+      - victoriametrics
+      - alertmanager
+    volumes:
+      - ./rules:/etc/alerts:ro
+    command:
+      - "-rule=/etc/alerts/*.yaml"
+      - "-datasource.url=http://victoriametrics:8428"
+      - "-notifier.url=http://alertmanager:9093"
+      - "-remoteWrite.url=http://victoriametrics:8428"
+      - "-remoteRead.url=http://victoriametrics:8428"
+      - "-httpListenAddr=:8880"
+    ports:
+      - "8880:8880"
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  api-tester:
+    image: api-tester:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: api-tester
+    user: "1001:1001"
+    ports:
+      - "8081:8081"
+    networks:
+      - monitoring
+      - observability-net
+    environment:
+      TZ: ${SYSTEM_TIMEZONE:-Europe/Moscow}
+      sre_username: dds_sre
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "--fail",
+          "http://app:8080/flask-health-check"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    configs:
+      - source: config.yaml
+        target: /usr/app/checker/config/config.yaml
+        mode: 0644
+      - source: config.json
+        target: /usr/app/data/config.json
+        mode: 0644
+
+
+  cache:
+    image: redis:7.4.1-alpine3.20
+    container_name: cache
+    volumes:
+      - redis-data:/data
+    command: [ "redis-server", "/usr/local/etc/redis/redis.conf" ]
+    environment:
+      REDIS_DATABASES: 4
+      REDIS_DISABLE_COMMANDS: FLUSHDB,FLUSHALL,CONFIG
+      ALLOW_EMPTY_PASSWORD: yes
+      REDIS_HOST: cache
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    configs:
+      - source: redis.conf
+        target: /usr/local/etc/redis/redis.conf
+        mode: 0644
+    networks:
+      - monitoring
+
+volumes:
+  vm-data:
+  loki-data:
+  grafana-data:
+  redis-data:
+    driver: local
+
+networks:
+  observability-net:
+    external: true
+  monitoring:
+    driver: bridge  
+
+configs:
+  config.json:
+    file: ./checker/data/data.json
+  config.yaml:
+    file: ./checker/config/config.yaml
+  redis.conf:
+    content: |
+      save 900 1
+      maxclients 100
+      maxmemory 16mb
+      maxmemory-policy volatile-lru

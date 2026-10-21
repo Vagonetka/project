@@ -1,0 +1,45 @@
+dds-pipeline:
+    name: api-client
+    period_seconds: 300
+    jobs:
+        - name: calculate-large-task
+          type: handle_request
+          sub_type: get_request
+          json_file: config.json
+          base:
+            failure_threshold: 2
+            timeout: 5
+          params:
+            url: http://client-api:8080/api/slow
+            headers: |
+                {
+                  "Content-Type": "$content_type"
+                }
+          envs:
+            - name: content_type
+              value: application/json
+          check:
+            - path:
+              - status
+              result: "slow but ok"
+
+        - name: get-users
+          type: handle_request
+          sub_type: get_request
+          json_file: config.json
+          base:
+            failure_threshold: 2
+            timeout: 5
+          params:
+            url: http://client-api:8080/api/users
+            headers: |
+                {
+                  "Content-Type": "$content_type"
+                }
+          envs:
+            - name: content_type
+              value: application/json
+          check:
+            - path:
+              - 0
+              result: ".+"

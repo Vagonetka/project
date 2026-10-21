@@ -1,0 +1,92 @@
+groups:
+  - name: client-api-alerts
+    interval: 30s
+    rules:
+      - alert: Client API - high error rate
+        expr: >-
+          sum(rate(api_http_requests_total{status_code=~"5.."}[5m]))
+          /
+          sum(rate(api_http_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          responsible: Николай Овсянников
+        annotations:
+          summary: >-
+            Доля 5xx на client-api выше 5%
+          description: >-
+            Текущая доля ошибок = {{ $value | humanizePercentage }} за 5 минут.
+
+      - alert: Client API - high p95 latency
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le, path) (rate(api_http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          responsible: Николай Овсянников
+        annotations:
+          summary: >-
+            P95 latency на {{ $labels.path }} выше 1 секунды
+          description: >-
+            P95 = {{ $value | humanizeDuration }} за 5 минут.
+
+      - alert: Client API - no traffic
+        expr: >-
+          sum(rate(api_http_requests_total[5m])) == 0
+        for: 5m
+        labels:
+          severity: critical
+          responsible: Николай Овсянников
+        annotations:
+          summary: >-
+            client-api не обрабатывает запросы более 5 минут
+          description: >-
+            RPS = 0. Проверьте, жив ли контейнер client-api и доступен ли он.
+
+      - alert: Client API - too many in-flight requests
+        expr: >-
+          sum(api_http_requests_in_progress) > 50
+        for: 2m
+        labels:
+          severity: warning
+          responsible: Николай Овсянников
+        annotations:
+          summary: >-
+            На client-api более 50 запросов в обработке
+          description: >-
+            Текущее значение = {{ $value }}. Возможна деградация или утечка.
+
+      - alert: Client API - high 4xx rate
+        expr: >-
+          sum(rate(api_http_requests_total{status_code=~"4.."}[5m]))
+          /
+          sum(rate(api_http_requests_total[5m]))
+          > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          responsible: Николай Овсянников
+        annotations:
+          summary: >-
+            Доля 4xx на client-api выше 20%
+          description: >-
+            Текущая доля = {{ $value | humanizePercentage }} за 5 минут.
+            Проверьте корректность запросов клиентов.
+
+      - alert: Client API - very slow endpoint
+        expr: >-
+          histogram_quantile(0.99,
+            sum by (le, path) (rate(api_http_request_duration_seconds_bucket[5m]))
+          ) > 5
+        for: 5m
+        labels:
+          severity: critical
+          responsible: Николай Овсянников
+        annotations:
+          summary: >-
+            P99 latency на {{ $labels.path }} выше 5 секунд
+          description: >-
+            P99 = {{ $value | humanizeDuration }}. Эндпоинт критически медленный.

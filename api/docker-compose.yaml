@@ -1,0 +1,16 @@
+services:
+  client-api:
+    build: .
+    container_name: client-api
+    ports:
+      - "8080:8080"
+    networks:
+      - observability-net
+    restart: unless-stopped
+    labels:
+      - "observability.role=observed"
+      - "observability.app=client-api"
+
+networks:
+  observability-net:
+    external: true
